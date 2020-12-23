@@ -11,6 +11,13 @@ import (
 */
 import "C"
 
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
 //var S7AreaPE = int(C.S7AreaPE)
 
 const (
@@ -292,4 +299,117 @@ func (client *Snap7Client) SetPlcDateTime(time DataTime) error {
 	}
 
 	return nil
+}
+
+//  Logo Client
+type Logo struct {
+	inner C.S7Object
+}
+
+// Create a new logo Client
+func NewLogo() Logo {
+	l := Logo{}
+	l.inner = C.Cli_Create()
+	return l
+}
+
+// refer http://snap7.sourceforge.net/snap7_lib_api.html
+func (l *Logo) setParam(number int, value int) {
+	// hard coded for REMOTEPORT
+	var p uint16 = uint16(value)
+
+	result := C.Cli_SetParam(l.inner, C.int(number), unsafe.Pointer(&p))
+	fmt.Println("setParam result:", result)
+}
+
+//  Connect to a Siemens LOGO server.
+//  Howto setup Logo communication configuration see: http://snap7.sourceforge.net/logo.html
+func (l *Logo) Connect(ip_address string, tsap_snap7 int, tsap_logo int, tcpport ...int) int {
+	port := 102
+	if len(tcpport) != 0 {
+		port = tcpport[0]
+	}
+
+	var addr *C.char = C.CString(ip_address)
+	// set port
+	l.setParam(REMOTE_PORT, port)
+	err := C.Cli_SetConnectionParams(l.inner, addr, C.ushort(tsap_snap7), C.ushort(tsap_logo))
+	if err != 0 {
+		C.Cli_Destroy(&l.inner)
+		fmt.Println("Error Connecting")
+		return int(err)
+	}
+
+	// Connect
+	err = C.Cli_Connect(l.inner)
+	if err != 0 {
+		C.Cli_Destroy(&l.inner)
+		fmt.Println("Error Connecting", port)
+		return int(err)
+	}
+
+	return 0
+}
+
+func (l *Logo) Read(vm_address string) []byte {
+	area := S7AreaDB
+	dbNumber := 1
+	size := 1
+	start := 0
+	var wordlen C.int
+
+	// Parse the address
+	if regexp.MustCompile("V[0-9]{1,4}.[0-7]").MatchString(vm_address) {
+		fmt.Printf("read, Bit address:%s\n", vm_address)
+		address := strings.Split(vm_address[1:], ".")
+		addressByte, _ := strconv.Atoi(address[0])
+		addressBit, _ := strconv.Atoi(address[1])
+		start = (addressByte * 8) + addressBit
+		wordlen = C.S7WLBit
+
+	}
+	// @todo implement other addressing options
+
+	buff := make([]byte, wordlen) // return value
+
+	fmt.Println("read, vm_address:", vm_address)
+
+	var err C.int = C.Cli_ReadArea(l.inner, C.int(area), C.int(dbNumber), C.int(start), C.int(size), wordlen, unsafe.Pointer(&buff[0]))
+	if err != 0 {
+		fmt.Println("read error:", err)
+	} else {
+		fmt.Println(buff)
+	}
+	return buff
+}
+
+func (l *Logo) Write(vm_address string, value int) int {
+	area := S7AreaDB
+	dbNumber := 1
+	start := 0
+	amount := 1
+	var wordlen C.int
+	var data []byte
+	// Parse the address
+	if regexp.MustCompile("V[0-9]{1,4}.[0-7]").MatchString(vm_address) {
+		fmt.Printf("write, Bit address:%s\n", vm_address)
+
+		address := strings.Split(vm_address[1:], ".")
+		addressByte, _ := strconv.Atoi(address[0])
+		addressBit, _ := strconv.Atoi(address[1])
+		start = (addressByte * 8) + addressBit
+		wordlen = C.S7WLBit
+		if value > 0 {
+			data = []byte{1}
+		} else {
+			data = []byte{0}
+		}
+	}
+	// @todo implement other addressing options
+	var err C.int = C.Cli_WriteArea(l.inner, C.int(area), C.int(dbNumber), C.int(start), C.int(amount), wordlen, unsafe.Pointer(&data[0]))
+	if err != 0 {
+		fmt.Println("Error writing to the logo", err)
+		return int(err)
+	}
+	return 0
 }
